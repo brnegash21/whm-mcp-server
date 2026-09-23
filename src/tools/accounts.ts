@@ -326,7 +326,7 @@ export function registerAccountTools(server: ToolRegistrar) {
         HASCGI: z.boolean().optional().describe("Enable CGI access"),
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {
@@ -356,7 +356,7 @@ export function registerAccountTools(server: ToolRegistrar) {
         pkg: z.string().describe("Target package name"),
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {
@@ -388,7 +388,7 @@ export function registerAccountTools(server: ToolRegistrar) {
           .describe("Also change the account's MySQL password to the new password"),
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {
@@ -446,7 +446,7 @@ export function registerAccountTools(server: ToolRegistrar) {
         quota: LimitSchema.describe("Disk quota in MB (0 or 'unlimited' = unlimited)"),
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {
@@ -473,7 +473,7 @@ export function registerAccountTools(server: ToolRegistrar) {
         bwlimit: LimitSchema.describe("Monthly bandwidth limit in MB (0 or 'unlimited' = unlimited)"),
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {

@@ -53,7 +53,10 @@ export function registerApiTools(server: ToolRegistrar) {
           .regex(/^[A-Za-z0-9_]+(\/[A-Za-z0-9_]+)?$/)
           .describe("WHM API 1 function name, e.g. 'get_nameserver_config' or 'listacls'"),
         params: ParamsSchema,
-        method: z.enum(["GET", "POST"]).default("GET").describe("POST for changes or large values"),
+        method: z
+          .enum(["POST", "GET"])
+          .default("POST")
+          .describe("POST (default) keeps parameters such as passwords out of URLs and access logs"),
         ...FormatSchema,
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -86,7 +89,10 @@ export function registerApiTools(server: ToolRegistrar) {
         module: z.string().regex(/^[A-Za-z0-9_]+$/).describe("UAPI module, e.g. 'Email' (case-sensitive)"),
         function: z.string().regex(/^[A-Za-z0-9_]+$/).describe("UAPI function, e.g. 'list_pops' (case-sensitive)"),
         params: ParamsSchema,
-        method: z.enum(["GET", "POST"]).default("GET").describe("POST for changes or large values"),
+        method: z
+          .enum(["POST", "GET"])
+          .default("POST")
+          .describe("POST (default) keeps parameters such as passwords out of URLs and access logs"),
         ...FormatSchema,
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },

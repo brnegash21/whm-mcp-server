@@ -49,7 +49,8 @@ export function registerServerTools(server: ToolRegistrar) {
           main_ip: r.ips?.ip?.find((i: any) => isTrue(i.mainaddr))?.ip,
           ip_count: r.ips?.ip?.length,
           accounts: r.accounts?.users,
-          license_max_accounts: r.license?.users,
+          // get_maximum_users reports 0 for an unlimited license.
+          license_max_accounts: r.license ? (Number(r.license.users) === 0 ? "unlimited" : r.license.users) : undefined,
           database: r.mysql ? `${r.mysql.server} ${r.mysql.version}` : undefined,
           default_php: r.php?.version,
           ...(Object.keys(errors).length ? { errors } : {}),
@@ -390,7 +391,8 @@ export function registerServerTools(server: ToolRegistrar) {
     {
       title: "Configure Service",
       description:
-        "Enable/disable a service and/or its chkservd monitoring. enabled=false stops the service. Omitted settings are left unchanged.",
+        "Enable/disable a service and/or its chkservd monitoring. enabled=false stops the service (disabling sshd cuts off SSH access). " +
+        "Omitted settings are left unchanged. Refuses to disable cpsrvd, which runs WHM itself. Confirm with user.",
       inputSchema: {
         service: z.string().describe("Service name, e.g. 'httpd', 'exim', 'cphulkd', 'spamd'"),
         enabled: z.boolean().optional().describe("Whether the service should be enabled (running)"),
@@ -403,6 +405,11 @@ export function registerServerTools(server: ToolRegistrar) {
       try {
         if (params.enabled === undefined && params.monitored === undefined) {
           return err("Pass 'enabled' and/or 'monitored'.");
+        }
+        if (params.service === "cpsrvd" && params.enabled === false) {
+          return err(
+            "Refusing to disable cpsrvd: WHM's docs warn against it, and it would take down WHM, cPanel, and this server's own API access."
+          );
         }
         const data: any = await whmCall(
           "configureservice",

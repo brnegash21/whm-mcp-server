@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { handleWhmError, whmCall, WhmParams } from "../services/client.js";
+import { definedParams, handleWhmError, whmCall, WhmParams } from "../services/client.js";
 import { err, fmtLimit, formatResponse, isTrue } from "../services/format.js";
 import { FormatSchema, LimitSchema } from "../schemas/common.js";
 import { ToolRegistrar } from "../types.js";
@@ -38,24 +38,38 @@ type PackageFields = {
  */
 function packageParams(fields: PackageFields, uppercaseMailLimits: boolean): WhmParams {
   const { dedicated_ip, max_email_per_hour, max_defer_fail_percentage, ...rest } = fields;
-  return {
+  return definedParams({
     ...rest,
     ip: dedicated_ip === undefined ? undefined : dedicated_ip ? "y" : "n",
     [uppercaseMailLimits ? "MAX_EMAIL_PER_HOUR" : "max_email_per_hour"]: max_email_per_hour,
     [uppercaseMailLimits ? "MAX_DEFER_FAIL_PERCENTAGE" : "max_defer_fail_percentage"]: max_defer_fail_percentage,
-  };
+  });
 }
+
+/** Settings getpkginfo reports under its own uppercase names; anything else is a package extension variable. */
+const CORE_PACKAGE_KEYS = new Set([
+  "BWLIMIT", "CGI", "CPMOD", "DIGESTAUTH", "FEATURELIST", "FRONTPAGE", "HASSHELL", "IP", "LANG",
+  "MAXADDON", "MAXFTP", "MAXLST", "MAXPARK", "MAXPOP", "MAXSQL", "MAXSUB", "MAX_DEFER_FAIL_PERCENTAGE",
+  "MAX_EMAILACCT_QUOTA", "MAX_EMAIL_PER_HOUR", "MAX_TEAM_USERS", "QUOTA", "_PACKAGE_EXTENSIONS", "name",
+]);
 
 /**
  * editpkg documents defaults for omitted parameters and drops package
- * extensions that aren't passed, so edits resend the package's current values.
- * getpkginfo reports them in uppercase, with null meaning unlimited.
+ * extensions (and their variables) that aren't passed, so edits resend the
+ * package's current values. getpkginfo reports them in uppercase, with null
+ * meaning unlimited, and includes extension variables under their own names.
  */
 function currentPackageParams(pkg: Record<string, any>): WhmParams {
   const limit = (key: string) =>
     !(key in pkg) ? undefined : pkg[key] === null || pkg[key] === "" ? "unlimited" : pkg[key];
   const flag = (key: string) => (pkg[key] === undefined || pkg[key] === null ? undefined : isTrue(pkg[key]));
-  return {
+  const extensionVariables = Object.fromEntries(
+    Object.entries(pkg).filter(
+      ([k, v]) => !CORE_PACKAGE_KEYS.has(k) && (typeof v === "string" || typeof v === "number")
+    )
+  );
+  return definedParams({
+    ...extensionVariables,
     featurelist: pkg.FEATURELIST,
     quota: limit("QUOTA"),
     bwlimit: limit("BWLIMIT"),
@@ -77,7 +91,7 @@ function currentPackageParams(pkg: Record<string, any>): WhmParams {
     cpmod: pkg.CPMOD,
     language: pkg.LANG,
     _PACKAGE_EXTENSIONS: pkg._PACKAGE_EXTENSIONS,
-  };
+  });
 }
 
 function changedFields(fields: PackageFields): string[] {
@@ -176,13 +190,13 @@ export function registerPackageTools(server: ToolRegistrar) {
       title: "Edit Hosting Package",
       description:
         "Change settings of an existing hosting package. Only the fields you pass change; the rest keep their current values. " +
-        "Applies to ALL accounts on the package.",
+        "Applies to ALL accounts on the package — confirm with the user.",
       inputSchema: {
         name: z.string().describe("Package name"),
         ...PackageFieldsSchema,
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {

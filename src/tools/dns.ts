@@ -10,6 +10,8 @@ interface ZoneRecord {
   ttl: number;
   type: string;
   data: string[];
+  /** Holds bytes that aren't valid UTF-8, so sending it back unchanged would corrupt it. */
+  binary: boolean;
 }
 
 /** A record as mass_edit_dns_zone expects it (serialized to JSON per item). */
@@ -21,8 +23,11 @@ interface RecordSpec {
   data: string[];
 }
 
-function fromB64(value: string | undefined): string {
-  return value ? Buffer.from(value, "base64").toString("utf8") : "";
+function fromB64(value: string | undefined): { text: string; lossless: boolean } {
+  if (!value) return { text: "", lossless: true };
+  const bytes = Buffer.from(value, "base64");
+  const text = bytes.toString("utf8");
+  return { text, lossless: Buffer.from(text, "utf8").equals(bytes) };
 }
 
 /**
@@ -33,13 +38,18 @@ async function fetchZone(domain: string): Promise<{ serial?: number; records: Zo
   const data: any = await whmCall("parse_dns_zone", { zone: domain });
   const records: ZoneRecord[] = (data.payload ?? [])
     .filter((item: any) => item.type === "record")
-    .map((item: any) => ({
-      line_index: item.line_index,
-      name: fromB64(item.dname_b64),
-      ttl: item.ttl,
-      type: item.record_type,
-      data: (item.data_b64 ?? []).map(fromB64),
-    }));
+    .map((item: any) => {
+      const name = fromB64(item.dname_b64);
+      const rdata = (item.data_b64 ?? []).map(fromB64);
+      return {
+        line_index: item.line_index,
+        name: name.text,
+        ttl: item.ttl,
+        type: item.record_type,
+        data: rdata.map((d: { text: string }) => d.text),
+        binary: !name.lossless || rdata.some((d: { lossless: boolean }) => !d.lossless),
+      };
+    });
   // SOA data: mname rname serial refresh retry expire minimum
   const serial = Number(records.find((r) => r.type === "SOA")?.data[2]);
   return { serial: isNaN(serial) ? undefined : serial, records };
@@ -98,6 +108,36 @@ function splitTxt(value: string): string[] {
   return chunks;
 }
 
+/**
+ * A hostname in record data that contains a dot is taken as fully qualified
+ * and gets the trailing dot zone files need; otherwise "mail.example.com"
+ * would mean mail.example.com.<zone>. Dotless names stay relative to the zone.
+ */
+function fqdn(host: string): string {
+  const h = host.trim();
+  return h.endsWith(".") || !h.includes(".") ? h : `${h}.`;
+}
+
+/** Positions of hostnames within each record type's data fields. */
+const HOSTNAME_FIELDS: Record<string, number[]> = {
+  CNAME: [0],
+  DNAME: [0],
+  ALIAS: [0],
+  NS: [0],
+  PTR: [0],
+  MX: [1],
+  SRV: [3],
+};
+
+/** Normalize caller-supplied record data: qualify hostnames and split long TXT strings. */
+function normalizeData(type: string, data: string[]): string[] {
+  if (type === "TXT") return data.flatMap(splitTxt);
+  const hosts = HOSTNAME_FIELDS[type] ?? [];
+  return data.map((d, i) => (hosts.includes(i) ? fqdn(d) : d));
+}
+
+const HOSTNAME_NOTE = "a name containing a dot is treated as fully qualified";
+
 const RecordFieldsSchema = {
   data: z
     .array(z.string())
@@ -105,19 +145,19 @@ const RecordFieldsSchema = {
     .describe(
       "Record data fields in zone-file order, e.g. A: ['192.0.2.10']; MX: ['10', 'mail.example.com.']; " +
         "TXT: ['v=spf1 +a +mx ~all']; SRV: ['10', '5', '5060', 'sip.example.com.']; CAA: ['0', 'issue', 'letsencrypt.org']. " +
-        "Takes precedence over the per-type fields below."
+        `Replaces all of the record's data; for hostnames, ${HOSTNAME_NOTE}.`
     ),
   address: z.string().optional().describe("A/AAAA: IP address"),
-  cname: z.string().optional().describe("CNAME: target hostname"),
-  exchange: z.string().optional().describe("MX: mail server hostname"),
+  cname: z.string().optional().describe(`CNAME: target hostname (${HOSTNAME_NOTE})`),
+  exchange: z.string().optional().describe(`MX: mail server hostname (${HOSTNAME_NOTE})`),
   preference: z.number().int().min(0).optional().describe("MX: priority (default 10)"),
   txtdata: z.string().optional().describe("TXT: record text (long values are split into 255-byte strings)"),
-  target: z.string().optional().describe("SRV: target hostname"),
+  target: z.string().optional().describe(`SRV: target hostname (${HOSTNAME_NOTE})`),
   priority: z.number().int().min(0).optional().describe("SRV: priority (default 0)"),
   weight: z.number().int().min(0).optional().describe("SRV: weight (default 0)"),
   port: z.number().int().min(0).max(65535).optional().describe("SRV: port"),
-  nsdname: z.string().optional().describe("NS: nameserver hostname"),
-  ptrdname: z.string().optional().describe("PTR: target hostname"),
+  nsdname: z.string().optional().describe(`NS: nameserver hostname (${HOSTNAME_NOTE})`),
+  ptrdname: z.string().optional().describe(`PTR: target hostname (${HOSTNAME_NOTE})`),
   caa_flag: z.number().int().min(0).max(255).optional().describe("CAA: flag (default 0)"),
   caa_tag: z.enum(["issue", "issuewild", "iodef"]).optional().describe("CAA: tag"),
   caa_value: z.string().optional().describe("CAA: value, e.g. 'letsencrypt.org'"),
@@ -143,12 +183,53 @@ type RecordFields = {
 
 const RECORD_FIELD_NAMES = Object.keys(RecordFieldsSchema) as (keyof RecordFields)[];
 
-function hasRecordFields(f: RecordFields): boolean {
-  return RECORD_FIELD_NAMES.some((k) => f[k] !== undefined);
+/** The record fields the caller passed, with hostnames qualified and TXT data split. */
+function providedRecordFields(type: string, f: RecordFields): RecordFields {
+  const out: Record<string, unknown> = {};
+  for (const k of RECORD_FIELD_NAMES) if (f[k] !== undefined) out[k] = f[k];
+  const p = out as RecordFields;
+  if (p.data) p.data = normalizeData(type, p.data);
+  for (const k of ["cname", "exchange", "target", "nsdname", "ptrdname"] as const) {
+    if (p[k] !== undefined) p[k] = fqdn(p[k]!);
+  }
+  return p;
+}
+
+/** An existing record's per-type fields, so an edit can change one and keep the rest. */
+function fieldsFromData(type: string, data: string[]): RecordFields {
+  const num = (v: string | undefined) => (v === undefined || isNaN(Number(v)) ? undefined : Number(v));
+  switch (type) {
+    case "A":
+    case "AAAA":
+      return { address: data[0] };
+    case "CNAME":
+      return { cname: data[0] };
+    case "MX":
+      return { preference: num(data[0]), exchange: data[1] };
+    case "TXT":
+      return { txtdata: data.join("") };
+    case "SRV":
+      return { priority: num(data[0]), weight: num(data[1]), port: num(data[2]), target: data[3] };
+    case "NS":
+      return { nsdname: data[0] };
+    case "PTR":
+      return { ptrdname: data[0] };
+    case "CAA":
+      return { caa_flag: num(data[0]), caa_tag: data[1], caa_value: data[2] };
+    default:
+      return {};
+  }
+}
+
+function binaryRecordError(line: number): ToolInputError {
+  return new ToolInputError(
+    `The record at line_index ${line} contains binary data that can't be sent back unchanged. ` +
+      "Pass its full new name and data, or edit it in WHM's Zone Editor."
+  );
 }
 
 function buildRecordData(type: string, f: RecordFields): string[] {
-  if (f.data?.length) return type === "TXT" ? f.data.flatMap(splitTxt) : f.data;
+  if (f.data?.length) return f.data;
   const need = (value: unknown, field: string) => {
     if (value === undefined || value === "") {
       throw new ToolInputError(`${type} records need '${field}' (or pass 'data').`);
@@ -352,7 +433,7 @@ export function registerDnsTools(server: ToolRegistrar) {
           dname: normalizeName(params.name, params.domain),
           ttl: params.ttl,
           record_type: params.type,
-          data: buildRecordData(params.type, params),
+          data: buildRecordData(params.type, providedRecordFields(params.type, params)),
         };
         const serial = params.serial ?? (await fetchZone(params.domain)).serial;
         const newSerial = await massEditZone(params.domain, serial, { add: [record] });
@@ -372,7 +453,8 @@ export function registerDnsTools(server: ToolRegistrar) {
     {
       title: "Edit DNS Record",
       description:
-        "Edit the record at a line_index from whm_get_dns_zone. Only the fields you pass change; the rest are kept from the current record.",
+        "Edit the record at a line_index from whm_get_dns_zone. Only the fields you pass change (e.g. just 'preference' of an MX record); " +
+        "the rest are kept from the current record. Confirm with user.",
       inputSchema: {
         domain: z.string(),
         line_index: z.number().int().min(0).describe("The record's line_index from whm_get_dns_zone"),
@@ -383,7 +465,7 @@ export function registerDnsTools(server: ToolRegistrar) {
         serial: SerialSchema,
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {
@@ -393,9 +475,17 @@ export function registerDnsTools(server: ToolRegistrar) {
           return err(`No record starts at line_index ${params.line_index} in ${params.domain}. Run whm_get_dns_zone to find it.`);
         }
         const type = params.type ?? existing.type;
+        const provided = providedRecordFields(type, params);
+        const replacesData = Boolean(provided.data?.length) || (type !== existing.type && Object.keys(provided).length > 0);
+        if (existing.binary && (params.name === undefined || !replacesData)) throw binaryRecordError(params.line_index);
         let data = existing.data;
-        if (hasRecordFields(params)) data = buildRecordData(type, params);
-        else if (type !== existing.type) throw new ToolInputError(`Changing the type to ${type} needs new record data.`);
+        if (Object.keys(provided).length > 0) {
+          // Fill fields the caller didn't pass from the current record (same type only).
+          const current = type === existing.type ? fieldsFromData(type, existing.data) : {};
+          data = buildRecordData(type, { ...current, ...provided });
+        } else if (type !== existing.type) {
+          throw new ToolInputError(`Changing the type to ${type} needs new record data.`);
+        }
         const record: RecordSpec = {
           line_index: params.line_index,
           dname: params.name !== undefined ? normalizeName(params.name, params.domain) : existing.name,
@@ -449,11 +539,24 @@ export function registerDnsTools(server: ToolRegistrar) {
     }
   );
 
-  const MassRecordSchema = z.object({
+  const MassDataSchema = z
+    .array(z.string())
+    .min(1)
+    .describe(`Record data fields in zone-file order (for hostnames, ${HOSTNAME_NOTE})`);
+
+  const MassAddSchema = z.object({
     name: z.string().describe("Record name: relative, FQDN with trailing dot, or '@'"),
     type: RecordTypeSchema,
     ttl: z.number().int().min(0).default(14400),
-    data: z.array(z.string()).min(1).describe("Record data fields in zone-file order"),
+    data: MassDataSchema,
+  });
+
+  const MassEditSchema = z.object({
+    line_index: z.number().int().min(0).describe("The record's line_index from whm_get_dns_zone"),
+    name: z.string().optional().describe("New name (default: unchanged)"),
+    type: RecordTypeSchema.optional().describe("New type (default: unchanged)"),
+    ttl: z.number().int().min(0).optional().describe("New TTL (default: unchanged)"),
+    data: MassDataSchema.optional().describe("New data fields in zone-file order (default: unchanged)"),
   });
 
   server.registerTool(
@@ -462,14 +565,11 @@ export function registerDnsTools(server: ToolRegistrar) {
       title: "Batch Edit DNS Zone",
       description:
         "Add, edit, and remove many records in one atomic zone update. Edits and removals use line_index values from whm_get_dns_zone; " +
-        "edited records need their full name/type/ttl/data.",
+        "an edit keeps the name, type, TTL, or data you leave out. Confirm with user.",
       inputSchema: {
         domain: z.string(),
-        add: z.array(MassRecordSchema).optional().describe("Records to add"),
-        edit: z
-          .array(MassRecordSchema.extend({ line_index: z.number().int().min(0) }))
-          .optional()
-          .describe("Records to replace, by line_index"),
+        add: z.array(MassAddSchema).optional().describe("Records to add"),
+        edit: z.array(MassEditSchema).optional().describe("Records to change, by line_index"),
         remove: z.array(z.number().int().min(0)).optional().describe("line_index values of records to remove"),
         serial: SerialSchema,
         ...FormatSchema,
@@ -488,16 +588,30 @@ export function registerDnsTools(server: ToolRegistrar) {
         if ((params.remove ?? []).some((line) => byLine.get(line)?.type === "SOA")) {
           return err("Refusing to remove the zone's SOA record.");
         }
-        const toSpec = (r: z.infer<typeof MassRecordSchema>, line_index?: number): RecordSpec => ({
-          ...(line_index !== undefined ? { line_index } : {}),
+        const toAddSpec = (r: z.infer<typeof MassAddSchema>): RecordSpec => ({
           dname: normalizeName(r.name, params.domain),
           ttl: r.ttl,
           record_type: r.type,
-          data: r.type === "TXT" ? r.data.flatMap(splitTxt) : r.data,
+          data: normalizeData(r.type, r.data),
         });
+        const toEditSpec = (r: z.infer<typeof MassEditSchema>): RecordSpec => {
+          const existing = byLine.get(r.line_index)!;
+          const type = r.type ?? existing.type;
+          if (!r.data && type !== existing.type) {
+            throw new ToolInputError(`line_index ${r.line_index}: changing the type to ${type} needs 'data'.`);
+          }
+          if (existing.binary && (r.name === undefined || !r.data)) throw binaryRecordError(r.line_index);
+          return {
+            line_index: r.line_index,
+            dname: r.name !== undefined ? normalizeName(r.name, params.domain) : existing.name,
+            ttl: r.ttl ?? existing.ttl,
+            record_type: type,
+            data: r.data ? normalizeData(type, r.data) : existing.data,
+          };
+        };
         const newSerial = await massEditZone(params.domain, params.serial ?? zone.serial, {
-          add: params.add?.map((r) => toSpec(r)),
-          edit: params.edit?.map((r) => toSpec(r, r.line_index)),
+          add: params.add?.map(toAddSpec),
+          edit: params.edit?.map(toEditSpec),
           remove: params.remove,
         });
         return formatResponse(

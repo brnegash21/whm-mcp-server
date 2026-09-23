@@ -132,7 +132,7 @@ export function registerSecurityTools(server: ToolRegistrar) {
         comment: z.string().optional(),
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {
@@ -194,7 +194,7 @@ export function registerSecurityTools(server: ToolRegistrar) {
       description:
         "Lift cPHulk brute-force blocks for IP addresses by clearing their failed-login history — the usual fix when a customer is locked out.",
       inputSchema: { ips: IpListSchema, ...FormatSchema },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {

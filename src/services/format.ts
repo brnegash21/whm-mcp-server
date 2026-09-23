@@ -1,4 +1,4 @@
-import { CHARACTER_LIMIT, ResponseFormat } from "../constants.js";
+import { CHARACTER_LIMIT, ResponseFormat, STRUCTURED_LIMIT } from "../constants.js";
 import { ToolInputError } from "./client.js";
 
 export interface ToolResult {
@@ -33,6 +33,12 @@ export function formatResponse(
     text =
       text.slice(0, CHARACTER_LIMIT - 200) +
       `\n\n[Response truncated at ${CHARACTER_LIMIT} characters. Add filters, lower 'limit', or page with 'offset'.]`;
+  }
+  // Clients may pass structuredContent to the model as-is, so bound it too.
+  const size = payload === undefined ? 0 : JSON.stringify(payload).length;
+  if (size > STRUCTURED_LIMIT) {
+    text += `\n\n[Structured data omitted: ${size} characters is over the ${STRUCTURED_LIMIT}-character limit. Add filters or lower 'limit'.]`;
+    return ok(text);
   }
   return ok(text, payload);
 }

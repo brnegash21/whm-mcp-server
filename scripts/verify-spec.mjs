@@ -100,6 +100,9 @@ function valueMatches(spec, schema, value) {
 const GENERIC_PARAM = /^api\.(version|filter\.|sort\.|chunk\.|columns\.)/;
 
 /** Enums the spec itself says are not exhaustive. */
+/** Package extension variables, which editpkg accepts in key=value form. */
+const EXTENSION_PARAMS = { editpkg: new Set(["wp_toolkit_plan"]) };
+
 const OPEN_ENUMS = new Set([
   "php_set_vhost_versions.version", // "This parameter also accepts any custom PHP package names."
 ]);
@@ -135,7 +138,7 @@ function checkRequest(req) {
         if (!OPEN_ENUMS.has(`${req.fn}.${base}`) && !valueMatches(spec, schemas.get(base), value)) {
           problems.push(`${label}: ${key}=${JSON.stringify(value)} doesn't match the documented type/enum`);
         }
-      } else if (!wildcards.some((w) => key.startsWith(w))) {
+      } else if (!wildcards.some((w) => key.startsWith(w)) && !EXTENSION_PARAMS[req.fn]?.has(key)) {
         problems.push(`${label}: parameter '${key}' is not documented`);
       }
     }
@@ -211,6 +214,8 @@ const FIXTURES = {
         rr(11, "www", 14400, "CNAME", ["example.com."]),
         rr(12, "example.com.", 14400, "MX", ["0", "mail.example.com."]),
         rr(13, "example.com.", 14400, "TXT", ["v=spf1 +a +mx ~all"]),
+        rr(15, "_sip._tcp", 14400, "SRV", ["10", "5", "5060", "sip.example.com."]),
+        { type: "record", line_index: 16, dname_b64: b64("bin"), ttl: 300, record_type: "TXT", data_b64: [Buffer.from([0xff, 0xfe]).toString("base64")] },
       ],
     },
   },
@@ -223,6 +228,9 @@ const FIXTURES = {
     },
   },
   getdomainowner: { data: { user: "exampleuser" } },
+  getpkginfo: {
+    data: { pkg: { QUOTA: 1000, IP: 1, MAX_EMAIL_PER_HOUR: 500, MAX_DEFER_FAIL_PERCENTAGE: 30, MAXSUB: 5, FEATURELIST: "default", _PACKAGE_EXTENSIONS: "wp_toolkit", wp_toolkit_plan: "deluxe" } },
+  },
   backup_destination_list: {
     data: {
       destination_list: [
@@ -341,6 +349,8 @@ const CASES = [
     { mass_edit_dns_zone: { zone: "example.com", serial: "2025010101", add: json({ dname: "www2", ttl: 14400, record_type: "A", data: ["192.0.2.30"] }) } }],
   ["whm_add_dns_record", { domain: "example.com", name: "example.com", type: "MX", exchange: "mx2.example.com.", preference: 20 },
     { mass_edit_dns_zone: { add: json({ dname: "example.com.", ttl: 14400, record_type: "MX", data: ["20", "mx2.example.com."] }) } }],
+  ["whm_add_dns_record", { domain: "example.com", name: "@", type: "MX", exchange: "mx3.example.com", preference: 30 },
+    { mass_edit_dns_zone: { add: json({ dname: "example.com.", ttl: 14400, record_type: "MX", data: ["30", "mx3.example.com."] }) } }],
   ["whm_add_dns_record", { domain: "example.com", name: "default._domainkey", type: "TXT", txtdata: LONG_TXT },
     { mass_edit_dns_zone: { add: (v) => { const r = JSON.parse(v); return r.data.length === 2 && r.data.join("") === LONG_TXT && r.data[0].length === 255; } } }],
   ["whm_add_dns_record", { domain: "example.com", name: "@", type: "CAA", caa_tag: "issue", caa_value: "letsencrypt.org", serial: 42 },
@@ -378,6 +388,18 @@ const CASES = [
   ["whm_get_package", { pkg: "gold" }, { getpkginfo: { pkg: "gold" } }],
   ["whm_create_package", { name: "gold", quota: 1024, maxaddon: "unlimited", max_email_per_hour: 200, hasshell: true, dedicated_ip: false },
     { addpkg: { name: "gold", quota: "1024", maxaddon: "unlimited", MAX_EMAIL_PER_HOUR: "200", hasshell: "1", ip: "n", QUOTA: null } }],
+  ["whm_edit_package", { name: "gold", quota: 4096 },
+    { editpkg: { quota: "4096", ip: "y", max_email_per_hour: "500", max_defer_fail_percentage: "30", wp_toolkit_plan: "deluxe", _PACKAGE_EXTENSIONS: "wp_toolkit" } }],
+  ["whm_edit_dns_record", { domain: "example.com", line_index: 12, preference: 20 },
+    { mass_edit_dns_zone: { edit: json({ line_index: 12, dname: "example.com.", ttl: 14400, record_type: "MX", data: ["20", "mail.example.com."] }) } }],
+  ["whm_edit_dns_record", { domain: "example.com", line_index: 15, port: 5061 },
+    { mass_edit_dns_zone: { edit: json({ line_index: 15, dname: "_sip._tcp", ttl: 14400, record_type: "SRV", data: ["10", "5", "5061", "sip.example.com."] }) } }],
+  ["whm_edit_dns_record", { domain: "example.com", line_index: 16, ttl: 60 }, { error: /binary data/ }],
+  ["whm_add_dns_record", { domain: "example.com", name: "x", type: "CNAME", cname: "target.example.net" },
+    { mass_edit_dns_zone: { add: json({ dname: "x", ttl: 14400, record_type: "CNAME", data: ["target.example.net."] }) } }],
+  ["whm_mass_edit_dns_zone", { domain: "example.com", edit: [{ line_index: 11, ttl: 60 }], add: [{ name: "m", type: "MX", data: ["10", "mx.example.com"] }] },
+    { mass_edit_dns_zone: { edit: json({ line_index: 11, dname: "www", ttl: 60, record_type: "CNAME", data: ["example.com."] }), add: json({ dname: "m", ttl: 14400, record_type: "MX", data: ["10", "mx.example.com."] }) } }],
+  ["whm_configure_service", { service: "cpsrvd", enabled: false }, { error: /cpsrvd/ }],
   ["whm_edit_package", { name: "gold", quota: 4096, max_email_per_hour: 100 },
     { getpkginfo: { pkg: "gold" }, editpkg: { name: "gold", quota: "4096", max_email_per_hour: "100", maxsub: present, featurelist: present, _PACKAGE_EXTENSIONS: present } }],
   ["whm_edit_package", { name: "gold" }, { error: /Nothing to change/ }],
@@ -398,8 +420,10 @@ const CASES = [
   ["whm_list_backup_users", { restore_point: "2025-01-31" }, { backup_user_list: { restore_point: "2025-01-31" } }],
   ["whm_backup_account", { user: "bob", skiphomedir: true }, { start_background_pkgacct: { user: "bob", compressionsetting: "compress", skiphomedir: "1" } }],
   ["whm_get_account_backup_status", { session_id: "abc" }, { get_pkgacct_session_state: { session_id: "abc" } }],
-  ["whm_restore_account", { user: "bob", restore_point: "2025-01-31" },
-    { restore_queue_add_task: { user: "bob", restore_point: "2025-01-31", mysql: "1", mail_config: "1", subdomains: "1", give_ip: "0" }, restore_queue_activate: {} }],
+  // The spec's example queue has a pending restore, so starting the queue must be refused.
+  ["whm_restore_account", { user: "bob", restore_point: "2025-01-31" }, { error: /pending restore/ }],
+  ["whm_restore_account", { user: "bob", restore_point: "2025-01-31", activate: false },
+    { restore_queue_add_task: { user: "bob", restore_point: "2025-01-31", mysql: "1", mail_config: "1", subdomains: "1", give_ip: "0" } }],
   // backup_date_list reports ISO timestamps; restores take YYYY-MM-DD.
   ["whm_restore_account", { user: "bob", restore_point: "2025-01-31T00:00:00.000Z", activate: false },
     { restore_queue_add_task: { restore_point: "2025-01-31" }, calls: { restore_queue_activate: 0 } }],
@@ -407,9 +431,10 @@ const CASES = [
   // resellers
   ["whm_list_resellers", {}, { listresellers: {} }],
   ["whm_get_reseller_stats", { user: "res" }, { resellerstats: { user: "res", filter_deleted: "1" }, acctcounts: { user: "res" } }],
-  ["whm_set_reseller_limits", { user: "res", account_limit: 10, diskspace_limit: 5000 },
+  ["whm_set_reseller_limits", { user: "res", account_limit: 10, diskspace_limit: 5000, enable_account_limit: true, enable_resource_limits: true },
     { setresellerlimits: { user: "res", account_limit: "10", enable_account_limit: "1", diskspace_limit: "5000", enable_resource_limits: "1" } }],
-  ["whm_set_reseller_limits", { user: "res", enable_overselling: true }, { setresellerlimits: { enable_overselling: "1", enable_account_limit: null, enable_resource_limits: null } }],
+  ["whm_set_reseller_limits", { user: "res", enable_overselling: true, enable_account_limit: false, enable_resource_limits: true }, { setresellerlimits: { enable_overselling: "1", enable_account_limit: "0", enable_resource_limits: "1" } }],
+  ["whm_set_reseller_limits", { user: "res", account_limit: 5 }, { error: /enable_resource_limits|Required/ }],
   ["whm_setup_reseller", { user: "bob" }, { setupreseller: { user: "bob", makeowner: "0" } }],
   ["whm_remove_reseller", { user: "bob" }, { unsetupreseller: { user: "bob" } }],
   // security

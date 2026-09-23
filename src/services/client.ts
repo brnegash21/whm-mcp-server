@@ -56,6 +56,11 @@ export function getClient(): AxiosInstance {
 export type WhmParam = string | number | boolean | null | undefined | Array<string | number>;
 export type WhmParams = Record<string, WhmParam>;
 
+/** Drop undefined entries, so spreading one param set over another can't erase values. */
+export function definedParams(params: WhmParams): WhmParams {
+  return Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined));
+}
+
 /**
  * Encode parameters the way WHM API 1 expects them. Booleans become `1`/`0`
  * (WHM rejects `true`/`false`), undefined/null values are dropped, and arrays

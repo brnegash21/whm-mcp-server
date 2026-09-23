@@ -66,7 +66,7 @@ export WHM_TOOLSETS="accounts,dns,email,logs"
 export WHM_READ_ONLY="true"
 ```
 
-Read-only mode keeps 51 tools and drops everything that changes the server, including `whm_call_api` and `whm_call_uapi`.
+Read-only mode keeps 51 tools and drops everything that changes the server, including `whm_call_api` and `whm_call_uapi`. Any value other than empty, `0`, `false`, `no`, or `off` turns it on.
 
 ## Run
 
@@ -99,6 +99,24 @@ Launches the MCP Inspector UI for calling tools by hand.
   }
 }
 ```
+
+## Remote connector (HTTP mode)
+
+To use the server from claude.ai (custom connectors), the Claude API, or Claude Code over HTTP, run it in Streamable HTTP mode behind HTTPS:
+
+```bash
+export MCP_AUTH_TOKEN="$(openssl rand -hex 32)"   # required, at least 32 characters
+export MCP_HTTP_PORT=3000                          # default; binds 127.0.0.1 unless MCP_HTTP_HOST is set
+npm start -- --http                                # or MCP_TRANSPORT=http
+```
+
+- Every request must send `Authorization: Bearer $MCP_AUTH_TOKEN`; anything else gets a 401.
+- HTTP mode starts **read-only**. Set `WHM_READ_ONLY=false` to expose write tools.
+- Put a TLS reverse proxy (Caddy, nginx, Cloudflare Tunnel) in front of `http://127.0.0.1:3000/mcp`. claude.ai connects from `160.79.104.0/21`, so you can firewall everything else.
+- **claude.ai:** Customize → Connectors → Add custom connector, URL `https://your-host/mcp`, choose **No sign-in**, and add a **Request header** `authorization` = `Bearer <token>`. Request headers are a beta available to some organizations; if the option is missing, claude.ai can't use this server yet (it would need OAuth).
+- **Claude Code:** `claude mcp add --transport http whm https://your-host/mcp --header "Authorization: Bearer <token>"`
+
+`npm run verify:http` checks auth, routing, and the read-only default.
 
 ## Verifying against the WHM API docs
 

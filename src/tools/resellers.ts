@@ -95,35 +95,28 @@ export function registerResellerTools(server: ToolRegistrar) {
     {
       title: "Set Reseller Limits",
       description:
-        "Set a reseller's account-count, disk, and bandwidth limits and overselling. Setting a limit also turns on its enforcement unless you pass the enable flag explicitly.",
+        "Set a reseller's account-count, disk, and bandwidth limits and overselling. WHM documents both enforcement flags as " +
+        "defaulting to off when omitted, and no API reports their current state, so both are required: check the current limits " +
+        "with whm_get_reseller_stats and confirm with the user first.",
       inputSchema: {
         user: z.string(),
+        enable_account_limit: z.boolean().describe("Enforce a maximum number of accounts (false = no account limit)"),
+        enable_resource_limits: z
+          .boolean()
+          .describe("Enforce the disk and bandwidth limits and overselling settings (false = no resource limits)"),
         account_limit: z.number().int().min(0).optional().describe("Max number of accounts"),
         bandwidth_limit: z.number().int().min(0).optional().describe("Total bandwidth limit, in MB"),
         diskspace_limit: z.number().int().min(0).optional().describe("Total disk space limit, in MB"),
-        enable_account_limit: z.boolean().optional().describe("Enforce account_limit"),
-        enable_resource_limits: z.boolean().optional().describe("Enforce the disk and bandwidth limits"),
         enable_overselling: z.boolean().optional().describe("Allow overselling"),
         enable_overselling_bandwidth: z.boolean().optional().describe("Allow overselling bandwidth"),
         enable_overselling_diskspace: z.boolean().optional().describe("Allow overselling disk space"),
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {
-        const { response_format, user, ...limits } = params;
-        if (Object.values(limits).every((v) => v === undefined)) {
-          return err("Nothing to change: pass at least one limit or setting.");
-        }
-        // WHM only enforces these limits when their enable flag is set.
-        const request = {
-          ...limits,
-          enable_account_limit: limits.enable_account_limit ?? (limits.account_limit !== undefined ? true : undefined),
-          enable_resource_limits:
-            limits.enable_resource_limits ??
-            (limits.bandwidth_limit !== undefined || limits.diskspace_limit !== undefined ? true : undefined),
-        };
+        const { response_format, user, ...request } = params;
         await whmCall("setresellerlimits", { user, ...request }, "POST");
         const applied = Object.entries(request).filter(([, v]) => v !== undefined);
         return formatResponse(

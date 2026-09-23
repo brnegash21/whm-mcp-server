@@ -144,7 +144,7 @@ export function registerBackupTools(server: ToolRegistrar) {
       title: "Back Up Account Now",
       description:
         "Create a full cpmove backup archive of one cPanel account in the background (pkgacct), e.g. before a risky change. " +
-        "The archive is written to the account's home directory unless tarroot is set, so it uses disk space. Returns a session_id for whm_get_account_backup_status.",
+        "The archive is written to the account's home directory, so it uses disk space. Returns a session_id for whm_get_account_backup_status.",
       inputSchema: {
         user: z.string(),
         compress: z.boolean().default(true).describe("gzip the archive"),
@@ -154,7 +154,6 @@ export function registerBackupTools(server: ToolRegistrar) {
         skipbwdata: z.boolean().optional().describe("Leave out bandwidth data"),
         incremental: z.boolean().optional().describe("Update an existing uncompressed archive in place"),
         low_priority: z.boolean().optional().describe("Run at reduced priority to limit load"),
-        tarroot: z.string().optional().describe("Directory to write the archive to"),
         ...FormatSchema,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -205,7 +204,8 @@ export function registerBackupTools(server: ToolRegistrar) {
       title: "Restore Account from Backup",
       description:
         "Restore a cPanel account from a backup date. OVERWRITES the account's current files (and databases, mail config, and subdomains if selected). " +
-        "Always confirm with the user. Queues the restore and starts the restore queue; follow it with whm_get_restore_queue.",
+        "Always confirm with the user. Queues the restore and starts the restore queue; follow it with whm_get_restore_queue. " +
+        "Starting the queue runs every pending restore, so this refuses to start it while other restores are pending.",
       inputSchema: {
         user: z.string(),
         restore_point: DateSchema,
@@ -221,6 +221,19 @@ export function registerBackupTools(server: ToolRegistrar) {
     },
     async (params) => {
       try {
+        if (params.activate) {
+          // restore_queue_activate restores every queued account, not just this one.
+          const queue: any = await whmCall("restore_queue_state");
+          const pending: any[] = queue?.pending ?? [];
+          if (pending.length > 0) {
+            return err(
+              `The restore queue already has ${pending.length} pending restore(s) (${pending
+                .map((t) => `${t.user} from ${t.restore_point}`)
+                .join(", ")}); starting it would run those too. ` +
+                "Review them with whm_get_restore_queue, or pass activate=false to only queue this restore."
+            );
+          }
+        }
         const task: any = await whmCall(
           "restore_queue_add_task",
           {

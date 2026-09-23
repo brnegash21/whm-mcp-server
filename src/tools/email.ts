@@ -433,7 +433,7 @@ export function registerEmailTools(server: ToolRegistrar) {
         domains: z.array(z.string()).min(1).max(100),
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {

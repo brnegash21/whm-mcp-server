@@ -175,7 +175,7 @@ export function registerSslTools(server: ToolRegistrar) {
         ip: z.string().optional().describe("IP to install on (default: the domain's IP)"),
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {

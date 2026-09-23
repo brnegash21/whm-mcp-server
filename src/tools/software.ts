@@ -93,7 +93,7 @@ export function registerSoftwareTools(server: ToolRegistrar) {
         php_fpm: z.boolean().optional().describe("Turn PHP-FPM on or off for these vhosts (default: keep current)"),
         ...FormatSchema,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async (params) => {
       try {
