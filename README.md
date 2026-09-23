@@ -2,7 +2,7 @@
 
 MCP server exposing the [WHM API 1](https://api.docs.cpanel.net/whm/introduction) as tools for server-level cPanel administration. Pairs with `cpanel-mcp-server` (per-account ops) and complements it nicely.
 
-Every tool is checked against cPanel's published OpenAPI specification (WHM API 11.138): see [Verifying against the WHM API docs](#verifying-against-the-whm-api-docs).
+Full guide: [docs/GUIDE.md](docs/GUIDE.md). Every tool is checked against cPanel's published OpenAPI specification (WHM API 11.138): see [Verifying against the WHM API docs](#verifying-against-the-whm-api-docs).
 
 ## What's covered
 
